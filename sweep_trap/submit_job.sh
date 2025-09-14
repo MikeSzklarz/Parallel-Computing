@@ -14,6 +14,9 @@ module load cpu/0.17.3b
 module load gcc/10.2.0
 module load openmpi/4.1.1
 module load anaconda3/2021.05
+module load slurm/expanse/23.02.7
+
+source /cm/shared/apps/spack/0.17.3/cpu/b/opt/spack/linux-rocky8-zen/gcc-8.5.0/anaconda3-2021.05-q4munrgvh7qp4o7r3nzcdkbuph4z7375/etc/profile.d/conda.sh
 
 conda activate sweep_trap
 
