@@ -17,7 +17,9 @@ Example:
 
 USAGE
 -----
-  python mpi_trap_sweep.py a b n1 n2 n_increment p1 p2 p_increment
+  python mpi_trap_sweep.py a b n1 n2 n_increment p1 p2
+    [--p-increment INCREMENT]
+    [--p-extra-increment THRESHOLD INCREMENT]
     [--exe ./mpi_trap_modified]
     [--mpirun mpirun]
     [--csv mpi_trap_sweep.csv]
@@ -27,15 +29,21 @@ USAGE
     [--efficiency-png efficiency.png]
 
 Positional args:
-  a, b               : Integration range (floats)
-  n1, n2, n_increment: Sweep for n (ints; inclusive; increment > 0)
-  p1, p2, p_increment: Sweep for p (ints; inclusive; increment > 0)
+  a, b                 : Integration range (floats)
+  n1, n2, n_increment  : Sweep for n (ints; inclusive; increment > 0)
+  p1, p2               : Start and end bounds for the number of processes (p).
+
+Optional args:
+  --p-increment        : Use a linear increment for p. If omitted, p is
+                         generated using powers of 2 by default.
+  --p-extra-increment  : (Power-of-2 mode only) Adds extra p values. Above
+                         THRESHOLD, it adds p values every INCREMENT up to p2.
 
 Outputs:
   - CSV columns: n,p,a,b,answer,time_seconds,speedup,efficiency
-  - timing.png:    Y=time(s), X=#processes, one curve per n
-  - speedup.png:   Y=speedup(p), X=#processes, one curve per n (requires p=1 baseline)
-  - efficiency.png:Y=efficiency(p), X=#processes, one curve per n (requires p=1 baseline)
+  - timing.png:      Y=time(s), X=#processes, one curve per n
+  - speedup.png:     Y=speedup(p), X=#processes, one curve per n (requires p=1 baseline)
+  - efficiency.png:  Y=efficiency(p), X=#processes, one curve per n (requires p=1 baseline)
 """
 
 import argparse
@@ -60,6 +68,43 @@ def inc_range(start: int, stop: int, step: int) -> List[int]:
         vals.append(x)
         x += step
     return vals
+
+def generate_p_values(p_start: int, p_end: int, extra_params: Optional[List[int]] = None) -> List[int]:
+    """
+    Generates a list of process counts (p) for the sweep.
+    Includes powers of 2 within the [p_start, p_end] range.
+    Optionally adds extra values at a fixed increment above a certain threshold.
+    """
+    if p_start < 1 or p_end < p_start:
+        raise ValueError("p range must be valid (p1 >= 1, p2 >= p1)")
+
+    # Generate base power-of-2 values
+    p_vals = set()
+    p = 1
+    while p <= p_end:
+        if p >= p_start:
+            p_vals.add(p)
+        # Handle case where p is already max int to avoid overflow
+        if p > p_end / 2:
+            break
+        p *= 2
+
+    # Add extra incremental values if specified
+    if extra_params:
+        threshold, increment = extra_params
+        if threshold < 1 or increment < 1:
+            raise ValueError("Extra increment threshold and value must be >= 1")
+        
+        current_p = threshold
+        while current_p <= p_end:
+            if current_p >= p_start:
+                p_vals.add(current_p)
+            # Avoid overflow
+            if current_p > p_end - increment:
+                break
+            current_p += increment
+
+    return sorted(list(p_vals))
 
 
 def parse_program_output(line: str) -> Tuple[float, float, float, int, int, float]:
@@ -145,7 +190,7 @@ def progress_bar(iteration: int, total: int, prefix: str = "Progress", bar_width
     """
     Render a single-line ASCII progress bar.
     Example:
-      Progress [##############------------------------]  25/100  25.0%
+      Progress [##############------------------------]   25/100   25.0%
     """
     if total <= 0:
         total = 1
@@ -283,7 +328,11 @@ def main():
     ap.add_argument("n_increment", type=int, help="Increment for n (must be > 0)")
     ap.add_argument("p1", type=int, help="Lower bound for p (inclusive)")
     ap.add_argument("p2", type=int, help="Upper bound for p (inclusive)")
-    ap.add_argument("p_increment", type=int, help="Increment for p (must be > 0)")
+    
+    ap.add_argument("--p-increment", type=int,
+                    help="Use a linear increment for p. Overrides the default power-of-2 method.")
+    ap.add_argument("--p-extra-increment", type=int, nargs=2, metavar=('THRESHOLD', 'INCREMENT'),
+                    help="(Power-of-2 mode only) Add extra p values with INCREMENT starting from THRESHOLD")
 
     ap.add_argument("--exe", default="./mpi_trap_modified",
                     help="Path to MPI program (default: ./mpi_trap_modified)")
@@ -306,7 +355,19 @@ def main():
     # Build sweep sets
     try:
         n_vals = inc_range(args.n1, args.n2, args.n_increment)
-        p_vals = inc_range(args.p1, args.p2, args.p_increment)
+
+        # Decide which mode to use for generating p values
+        if args.p_increment is not None:
+            # --- Linear Increment Mode ---
+            if args.p_extra_increment is not None:
+                print("[WARN] --p-extra-increment is ignored when --p-increment is used.", file=sys.stderr)
+            print("--> Generating p values with linear increment.")
+            p_vals = inc_range(args.p1, args.p2, args.p_increment)
+        else:
+            # --- Default Power-of-2 Mode ---
+            print("--> Generating p values using powers of 2.")
+            p_vals = generate_p_values(args.p1, args.p2, args.p_extra_increment)
+
     except ValueError as e:
         print(f"[ERROR] {e}", file=sys.stderr)
         sys.exit(2)
@@ -314,6 +375,10 @@ def main():
     if not n_vals or not p_vals:
         print("[ERROR] Empty sweep ranges. Check bounds and increments.", file=sys.stderr)
         sys.exit(2)
+
+    # Print p_vals to be tested
+    print(f"--> Will test the following {len(p_vals)} values for p: {p_vals}")
+    print("-" * 60)
 
     a, b = args.a, args.b
     exe = args.exe
@@ -392,7 +457,7 @@ def main():
     print(f"\nWrote {len(results)} rows to {csv_path}")
     print_table(results)
 
-    # Make plots (readable fonts, grid, markers, top-right legends)
+    # Make plots
     save_plot_time(results, args.timing_png, a, b)
     save_plot_speedup(results, args.speedup_png, a, b)
     save_plot_efficiency(results, args.efficiency_png, a, b)
@@ -400,4 +465,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
