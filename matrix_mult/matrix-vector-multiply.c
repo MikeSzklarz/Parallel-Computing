@@ -2,13 +2,13 @@
  * matrix-vector-multiply.c
  *
  * Usage:
- *   ./matrix-vector-multiply <input matrix A> <input vector B> <output C>
+ * ./matrix-vector-multiply <input matrix A> <input vector B> <output C>
  *
  * File format (same as make-matrix): [int rows][int cols][double payload row-major]
  * Timing:
- *   - Prints machine-readable one-line summary:
- *       TIMING total_s=<..> read_s=<..> compute_s=<..> write_s=<..> m=<..> n=<..>
- *   - Also prints a human-readable breakdown.
+ * - Prints machine-readable one-line summary:
+ * TIMING total_s=<..> read_s=<..> compute_s=<..> write_s=<..> m=<..> n=<..>
+ * - Also prints a human-readable breakdown.
  */
 
 #include <stdio.h>
@@ -302,9 +302,16 @@ int main(int argc, char **argv) {
     /* Totals */
     const double total_s = now_sec() - t_start;
 
+    /* FLOPS calculation */
+    double flops = (double)m * (2.0 * (double)n - 1.0);
+    double gflops_total = (total_s > 0) ? flops / (total_s * 1e9) : 0.0;
+    double gflops_compute = (compute_s > 0) ? flops / (compute_s * 1e9) : 0.0;
+
+
     /* Machine-readable one-liner for scripts */
-    printf("TIMING total_s=%.9f read_s=%.9f compute_s=%.9f write_s=%.9f m=%zu n=%zu\n",
-           total_s, read_s, compute_s, write_s, m, n);
+    printf("TIMING total_s=%.9f read_s=%.9f compute_s=%.9f write_s=%.9f m=%zu n=%zu total_gflops=%.9f compute_gflops=%.9f\n",
+           total_s, read_s, compute_s, write_s, m, n, gflops_total, gflops_compute);
+
 
     /* Human-readable breakdown */
     fprintf(stdout,
@@ -313,13 +320,16 @@ int main(int argc, char **argv) {
             "  read:    %.9f\n"
             "  compute: %.9f\n"
             "  write:   %.9f\n"
-            "  total:   %.9f\n",
+            "  total:   %.9f\n"
+            "Performance:\n"
+            "  Total GFLOPS:   %.9f\n"
+            "  Compute GFLOPS: %.9f\n",
             A.rows, A.cols, B.rows, B.cols, C.rows, C.cols,
-            read_s, compute_s, write_s, total_s);
+            read_s, compute_s, write_s, total_s, gflops_total, gflops_compute);
+
 
     free(A.block);
     free(B.block);
     free(C.block);
     return EXIT_SUCCESS;
 }
-
