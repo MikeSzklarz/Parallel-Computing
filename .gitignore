@@ -7,3 +7,8 @@
 
 *.png
 *.csv
+
+*.dat
+*.raw
+*.mp4
+*.o
