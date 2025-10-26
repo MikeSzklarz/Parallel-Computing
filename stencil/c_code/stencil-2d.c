@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "utilities.h"
+#include "timer.h" // <-- ADDED: Include the timer header
 
 int main(int argc, char* argv[]) {
     // --- 1. Print usage and parse arguments ---
@@ -66,7 +67,6 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // *** FILE SIZE FIX ***
         // Write the metadata (rows, cols) ONCE at the beginning
         // of the "all iterations" file.
         if (fwrite(&rows, sizeof(int), 1, all_iter_stream) != 1 ||
@@ -81,16 +81,21 @@ int main(int argc, char* argv[]) {
     
     // --- 4. Write initial state (Iteration 0) to movie file ---
     if (all_iter_stream != NULL) {
-        // This function now *only* writes the raw data, not metadata
+        // This function *only* writes the raw data, not metadata
         append_data_to_stream(all_iter_stream, current_grid, rows, cols);
     }
 
     // --- 5. Define stencil weights ---
     // Simple 9-point average (sum of all 9 cells / 9.0)
     const double w_total = 9.0;
+    
+    // --- ADDED: Declare timer variables ---
+    double start, finish, elapsed;
 
     // --- 6. Perform stencil iterations ---
     printf("Starting %d stencil iterations on %dx%d grid...\n", k_iters, rows, cols);
+
+    GET_TIME(start); // <-- ADDED: Start timer
 
     for (int k = 0; k < k_iters; k++) {
         // Compute new values for all INTERIOR points
@@ -125,7 +130,12 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    GET_TIME(finish); // <-- ADDED: Stop timer
+    elapsed = finish - start; // <-- ADDED: Calculate elapsed time
+
     printf("Iterations complete.\n");
+    printf("Computation Time: %f seconds\n", elapsed); // <-- Human-readable
+    printf("COMP_TIME: %f\n", elapsed); // <-- Machine-readable for parser
 
     // --- 7. Write final state to output file ---
     // This function (write_data_to_file) is unchanged
@@ -144,4 +154,5 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
+
 
