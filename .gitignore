@@ -1,5 +1,4 @@
 # for ignoring binary executables - no extension
-*
 !/**/
 !*.*
 
