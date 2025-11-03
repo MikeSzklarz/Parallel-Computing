@@ -11,10 +11,13 @@
 #SBATCH -t 00:30:00
 
 module purge
-module load cpu
-module load gcc
-module load python
+module load cpu/0.17.3b
+module load gcc/10.2.0
+module load openmpi/4.1.1
+module load anaconda3/2021.05
 module load slurm
+
+conda activate stencil
 
 export SCRATCH_DIR=/scratch/$USER/job_$SLURM_JOB_ID
 mkdir -p "$SCRATCH_DIR"
