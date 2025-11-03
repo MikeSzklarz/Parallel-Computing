@@ -8,7 +8,7 @@ CFLAGS = -O3 -Wall -Wstrict-prototypes -std=gnu99 -march=native
 LFLAGS = -lm
 
 # List of all program executables to build
-PROGS = print-2d make-2d stencil-2d
+PROGS = print-2d make-2d stencil-2d stencil-2d-pth
 
 # --- Targets ---
 
@@ -26,6 +26,9 @@ make-2d: utilities.o make-2d.o
 stencil-2d: utilities.o stencil-2d.o
 	$(CC) $(CFLAGS) $(LFLAGS) -o stencil-2d utilities.o stencil-2d.o
 
+stencil-2d-pth: utilities.o stencil-2d-pth.o
+	$(CC) $(CFLAGS) $(LFLAGS) -o stencil-2d-pth utilities.o stencil-2d-pth.o -pthread
+
 # --- Compiling Object Files ---
 # Each .c file depends on its .c source and any .h files it includes
 
@@ -40,6 +43,10 @@ make-2d.o: make-2d.c utilities.h
 
 stencil-2d.o: stencil-2d.c utilities.h
 	$(CC) $(CFLAGS) -c stencil-2d.c
+
+# --- THIS IS THE CORRECTED RULE ---
+stencil-2d-pth.o: stencil-2d-pth.c utilities.h
+	$(CC) $(CFLAGS) -c stencil-2d-pth.c -o $@
 
 # --- Clean Target ---
 # This is the target that was missing.

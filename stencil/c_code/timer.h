@@ -1,37 +1,19 @@
-/*
- * timer.h
- *
- * Purpose: Define a macro that returns the number of seconds that
- * have elapsed since some point in the past. The timer
- * should return times with microsecond accuracy.
- *
- * Note: The argument passed to the GET_TIME macro should be
- * a double, "not" a pointer to a double.
- *
- * Example:
- *
- * #include "timer.h"
- * double start, finish, elapsed;
- * GET_TIME(start);
- * // Code to be timed
- * GET_TIME(finish);
- * elapsed = finish - start;
- * printf("The code to be timed took %e seconds\n", elapsed);
- *
- * From the IPP book, Section 3.6.1 (pp. 121 and ff.) 
- * and Section 6.1.2 (pp. 273 and ff.)
- */
+#ifndef TIMER_H
+#define TIMER_H
 
-#ifndef _TIMER_H_
-#define _TIMER_H_
+#include <time.h>
 
-#include <sys/time.h>
-
-/* The argument now should be a double (not a pointer to a double) */
-#define GET_TIME(now) { \
-   struct timeval t; \
-   gettimeofday(&t, NULL); \
-   now = t.tv_sec + t.tv_usec/1000000.0; \
+// Returns the current wall-clock time (seconds) as a double.
+// Uses CLOCK_MONOTONIC for stable timing.
+static inline double get_time_seconds(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
-#endif /* _TIMER_H_ */
+// Macro for consistency with legacy code.
+#define GET_TIME(var) \
+    do { (var) = get_time_seconds(); } while (0)
+
+#endif // TIMER_H
