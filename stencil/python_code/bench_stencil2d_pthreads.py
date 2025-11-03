@@ -512,6 +512,12 @@ def main():
         help="Only generate an sbatch template file in the script directory and exit.",
     )
 
+    ap.add_argument(
+        "--keep_data",
+        action="store_true",
+        help="Keep the large intermediate data files in the experiment data/ directory. By default these files are removed to save space.",
+    )
+
     # iso ladder range "start step"
     ap.add_argument("--eff_range", type=str, default="0.29 0.05")
 
@@ -714,10 +720,27 @@ def main():
     if copy_back_from_scratch:
         try:
             ensure_dir(local_exp_dir.parent)
+            # If data files are not requested to be kept, remove the large data dir on scratch
+            if not args.keep_data:
+                data_dir_scratch = exp_dir / "data"
+                if data_dir_scratch.exists():
+                    try:
+                        print(
+                            f"Removing large data files from scratch before copyback: {data_dir_scratch}"
+                        )
+                        shutil.rmtree(data_dir_scratch)
+                    except Exception as e:
+                        print(
+                            "Warning: failed to remove scratch data dir before copyback:",
+                            e,
+                        )
+
             print(f"Copying results back to local results: {local_exp_dir}")
             # use copytree with dirs_exist_ok if available
             shutil.copytree(exp_dir, local_exp_dir, dirs_exist_ok=True)
             print("Copy complete.")
+
+            # Optionally remove the scratch experiment directory after copy
             if args.remove_scratch:
                 try:
                     print(f"Removing scratch experiment directory: {exp_dir}")
@@ -726,6 +749,16 @@ def main():
                     print("Failed to remove scratch dir:", e)
         except Exception as e:
             print("Failed to copy results back from scratch:", e)
+    else:
+        # Running locally (not on scratch): remove large data files if not requested
+        if not args.keep_data:
+            try:
+                data_dir_local = local_exp_dir / "data"
+                if data_dir_local.exists():
+                    print(f"Removing large local data files: {data_dir_local}")
+                    shutil.rmtree(data_dir_local)
+            except Exception as e:
+                print("Warning: failed to remove local data dir:", e)
 
 
 if __name__ == "__main__":
