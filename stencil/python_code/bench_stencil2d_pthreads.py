@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import argparse, csv, os, re, subprocess, sys, time
+import argparse, csv, os, re, subprocess, sys, time, shutil
 from pathlib import Path
 import numpy as np
 import matplotlib
@@ -90,6 +90,52 @@ def stamp_name(Ns, Is, Ps, label):
     p_desc = f"{min(Ps)}-{max(Ps)}x{len(Ps)}"
     n_desc = f"{min(Ns)}-{max(Ns)}x{len(Ns)}"
     return f"N[{n_desc}]_I[{i_desc}]_P[{p_desc}]_{label}_{ts}"
+
+
+def _sbatch_template():
+    """Return a text template for running this benchmark via sbatch on Expanse.
+
+    The template copies the submission directory to node-local scratch, cd's into
+    the copied tree and runs the Python benchmark with --use_scratch. Replace
+    placeholders (like <<PROJECT>>) before submitting.
+    """
+    return """#!/bin/bash
+#SBATCH --job-name="bench_stencil"
+#SBATCH --output="bench_stencil.%j.%N.out"
+#SBATCH --partition=compute
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=0
+#SBATCH --account=<<PROJECT>>
+#SBATCH --export=ALL
+#SBATCH -t 02:00:00
+
+module purge
+module load cpu
+module load gcc
+module load python
+module load slurm
+
+export SCRATCH_DIR=/scratch/$USER/job_$SLURM_JOB_ID
+mkdir -p "$SCRATCH_DIR"
+
+# Copy the submission directory (SLURM_SUBMIT_DIR) to node-local scratch
+rsync -av --exclude='*.o' --exclude='results' "$SLURM_SUBMIT_DIR/" "$SCRATCH_DIR/workdir/"
+
+cd "$SCRATCH_DIR/workdir/stencil/python_code"
+
+# Example invocation: adjust arguments as needed. Use --use_scratch so the
+# benchmark writes outputs to node-local scratch and then copies them back.
+# The --base_results should point to a directory on the shared filesystem
+# (for example a 'results' directory under the submission directory).
+python3 bench_stencil2d_pthreads.py --use_scratch --remove_scratch \
+    --base_results "$SLURM_SUBMIT_DIR/results" \
+    --N1 128 --N2 256 --num_Ns 3 --P_start 1 --P_step 1 --P_max 8 --I1 10 --I2 200 --Istep 20 \
+    --warmup 1 --trials 4 --timeout_sec 600
+
+# After the job finishes, results will be copied back to $SLURM_SUBMIT_DIR/results/<exp_name>
+"""
 
 
 # ----------------------------- plotting -----------------------------
@@ -424,10 +470,43 @@ def main():
     )
     ap.add_argument("--label", default="bench")
 
+    # cluster / scratch options
+    ap.add_argument(
+        "--use_scratch",
+        action="store_true",
+        help="When set (and SLURM_JOB_ID is present), perform the experiment in node-local scratch (/scratch/$USER/job_$SLURM_JOB_ID) and copy results back.",
+    )
+    ap.add_argument(
+        "--remove_scratch",
+        action="store_true",
+        help="Remove the scratch experiment directory after copying back results (only used with --use_scratch).",
+    )
+    ap.add_argument(
+        "--generate_sbatch",
+        action="store_true",
+        help="Only generate an sbatch template file in the script directory and exit.",
+    )
+
     # iso ladder range "start step"
     ap.add_argument("--eff_range", type=str, default="0.29 0.05")
 
     args = ap.parse_args()
+
+    # If requested, generate sbatch template and exit
+    if args.generate_sbatch:
+        try:
+            here = Path(__file__).resolve().parent
+            template_path = here / "submit_bench_sbatch.template.sh"
+            if template_path.exists():
+                print(f"Template already exists: {template_path}")
+            else:
+                template_text = _sbatch_template()
+                template_path.write_text(template_text)
+                template_path.chmod(0o755)
+                print(f"Wrote sbatch template: {template_path}")
+        except Exception as e:
+            print("Failed to write sbatch template:", e)
+        return
 
     # Prepare sweeps
     Ns = int_linspace(args.N1, args.N2, args.num_Ns)
@@ -436,7 +515,27 @@ def main():
 
     # Build experiment directory layout
     exp_name = stamp_name(Ns, Is, Ps, args.label)
-    exp_dir = ensure_dir(Path(args.base_results) / exp_name)
+    local_exp_dir = Path(args.base_results) / exp_name
+
+    # default: run in local results dir
+    exp_dir = local_exp_dir
+    copy_back_from_scratch = False
+
+    # If requested, attempt to use node-local scratch on Expanse
+    if args.use_scratch:
+        slurm_job = os.environ.get("SLURM_JOB_ID")
+        slurm_user = os.environ.get("USER") or os.environ.get("LOGNAME")
+        if slurm_job and slurm_user:
+            scratch_base = Path(f"/scratch/{slurm_user}/job_{slurm_job}")
+            exp_dir = scratch_base / exp_name
+            copy_back_from_scratch = True
+            print(f"Using node-local scratch for experiment: {exp_dir}")
+        else:
+            print(
+                "--use_scratch was requested but SLURM_JOB_ID or USER not found in environment; falling back to local results dir."
+            )
+
+    exp_dir = ensure_dir(exp_dir)
     data_dir = ensure_dir(exp_dir / "data")
     csv_dir = ensure_dir(exp_dir / "csv")
     plots_root = ensure_dir(exp_dir / "plots")
@@ -585,6 +684,23 @@ def main():
         print(f" {curves_dir}/efficiency_vs_P_by_N_I{I}.png")
         print(f" {heatmaps_dir}/efficiency_heatmap_I{I}.png")
         print(f" {iso_dir}/isoefficiency_surface_I{I}.png")
+
+    # If we ran on scratch, copy results back to local results dir
+    if copy_back_from_scratch:
+        try:
+            ensure_dir(local_exp_dir.parent)
+            print(f"Copying results back to local results: {local_exp_dir}")
+            # use copytree with dirs_exist_ok if available
+            shutil.copytree(exp_dir, local_exp_dir, dirs_exist_ok=True)
+            print("Copy complete.")
+            if args.remove_scratch:
+                try:
+                    print(f"Removing scratch experiment directory: {exp_dir}")
+                    shutil.rmtree(exp_dir)
+                except Exception as e:
+                    print("Failed to remove scratch dir:", e)
+        except Exception as e:
+            print("Failed to copy results back from scratch:", e)
 
 
 if __name__ == "__main__":
