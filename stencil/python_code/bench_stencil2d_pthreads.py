@@ -612,9 +612,6 @@ def main():
         for I in Is:
             for P in Ps:
                 job_id += 1
-                print(
-                    f"[{job_id:3d}/{total:3d}] N={N:4d} I={I:3d} P={P:2d} — trials={args.trials}"
-                )
                 out_path = data_dir / f"final.P{P}.N{N}.I{I}.dat"
                 times = time_pthreads(
                     args.pth_exe,
@@ -626,6 +623,7 @@ def main():
                     args.trials,
                     args.timeout_sec,
                 )
+                # record raw times
                 for t_idx, t in enumerate(times, 1):
                     raw_rows.append(
                         {
@@ -637,6 +635,16 @@ def main():
                             "tp_time": t,
                         }
                     )
+                # print compute time (mean over trials) instead of printing trials count
+                try:
+                    tp_mean = float(np.mean(times)) if times else float("nan")
+                    tp_std = float(np.std(times, ddof=0)) if times else float("nan")
+                except Exception:
+                    tp_mean = float("nan")
+                    tp_std = float("nan")
+                print(
+                    f"[{job_id:3d}/{total:3d}] N={N:4d} I={I:3d} P={P:3d} — compute={tp_mean:.4f}s"
+                )
 
     # Write raw rows & build summary
     write_csv(raw_csv, raw_rows, ["rows", "cols", "iters", "P", "trial", "tp_time"])
