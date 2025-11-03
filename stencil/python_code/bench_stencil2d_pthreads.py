@@ -63,13 +63,38 @@ def int_linspace(n1, n2, num):
 
 
 def int_range_inclusive(start, stop, step):
-    if step <= 0:
-        raise ValueError("step must be > 0")
+    # Allow step==0 to indicate a single-value range (useful for iterations)
+    if step < 0:
+        raise ValueError("step must be >= 0")
+    if step == 0:
+        return [start]
     out, v = [], start
     while v <= stop:
         out.append(v)
         v += step
     return out
+
+
+def int_range_threads(start, stop, step):
+    """Generate a thread-count sequence that includes 1 and then "aligned"
+    multiples when step > 1 so that specifying start=1 and step=16 yields
+    [1,16,32,...] rather than [1,17,33,...].
+
+    Behavior:
+    - If step <= 0: ValueError
+    - If start == 1 and step > 1: result = [1] + [k*step for k in 1..] up to stop
+    - Otherwise: falls back to int_range_inclusive(start, stop, step)
+    """
+    if step <= 0:
+        raise ValueError("step must be > 0 for threads")
+    if start == 1 and step > 1:
+        out = [1]
+        v = step
+        while v <= stop:
+            out.append(v)
+            v += step
+        return out
+    return int_range_inclusive(start, stop, step)
 
 
 def write_csv(path, rows, fieldnames):
@@ -511,7 +536,7 @@ def main():
     # Prepare sweeps
     Ns = int_linspace(args.N1, args.N2, args.num_Ns)
     Is = int_range_inclusive(args.I1, args.I2, args.Istep)
-    Ps = int_range_inclusive(args.P_start, args.P_max, args.P_step)
+    Ps = int_range_threads(args.P_start, args.P_max, args.P_step)
 
     # Build experiment directory layout
     exp_name = stamp_name(Ns, Is, Ps, args.label)
