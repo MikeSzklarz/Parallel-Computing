@@ -11,3 +11,6 @@
 *.raw
 *.mp4
 *.o
+
+perf_results*
+results*
