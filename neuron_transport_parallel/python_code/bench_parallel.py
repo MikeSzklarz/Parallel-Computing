@@ -207,7 +207,7 @@ def plot_efficiency_heatmap(df_summary, plots_dir, dpi=150):
         n_values = sorted(df_pivot.index)
         p_values = sorted(df_pivot.columns)
 
-        # Get the 2D data array    
+        # Get the 2D data array    
         efficiency_data = df_pivot.to_numpy()
         plt.figure(figsize=(max(10, len(p_values)), max(8, len(n_values))))
 
@@ -405,8 +405,8 @@ def main():
 
     # Sweep args (n)
     parser.add_argument('--n-start', type=int, default=100000, help='Min particle count n')
-    parser.add_argument('--n-max', type=int, default=1000000000, help='Max particle count n')
-    parser.add_argument('--n-steps', type=int, default=10, help='Number of n values to test (logarithmic scale)')
+    parser.add_argument('--n-max', type=int, default=1000000, help='Max particle count n')
+    parser.add_argument('--n-steps', type=int, default=2, help='Number of n values to test (logarithmic scale)')
     
     # Sweep args (P)
     parser.add_argument('--P-start', type=int, default=1, help='Min threads/processes P')
@@ -482,8 +482,23 @@ def main():
     else:
         n_values = [args.n_start]
         
-    p_values = range(args.P_start, args.P_max + 1, args.P_step)
+    # --- START: MODIFIED SECTION ---
+    # Create the user-requested range of P values
+    p_values_range = range(args.P_start, args.P_max + 1, args.P_step)
+    
+    # Use a set for easy manipulation
+    p_values_set = set(p_values_range)
+    
+    # Add P=1 if it's not present, as it's required for T1 baseline
+    if 1 not in p_values_set:
+        logger.info("--P-start was not 1. Automatically adding P=1 for serial baseline (T1).")
+        p_values_set.add(1)
+        
+    # Sort the final list to ensure runs happen in a logical order
+    p_values = sorted(list(p_values_set))
+    
     tasks = [(n, p) for n in n_values for p in p_values]
+    # --- END: MODIFIED SECTION ---
     
     eff_targets = [float(e) for e in args.eff_targets.split(',')]
     
@@ -551,7 +566,7 @@ def main():
     
     summary_csv_path = os.path.join(args.results_dir, "summary.csv")
     df_summary.to_csv(summary_csv_path, index=False)
-    logger.info("Wrote summary data to %s", summary_csv_path)
+    logger.info("WWrote summary data to %s", summary_csv_path)
 
     # --- 4. Plot Results ---
     logger.info("Generating plots...")
