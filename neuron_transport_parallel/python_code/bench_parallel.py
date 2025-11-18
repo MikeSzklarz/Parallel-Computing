@@ -8,6 +8,7 @@ Sweeps over a range of particle counts (n) and processor/thread counts (P).
 Calculates and plots timing, speedup, efficiency, and isoefficiency.
 
 This script implements the requirements from pages 5-6 of MCNT-Parallel.pdf.
+It now also compiles the required C executable before running.
 """
 
 import argparse
@@ -245,6 +246,66 @@ def plot_efficiency_heatmap(df_summary, plots_dir, dpi=150):
         # Don't crash the whole script if this optional plot fails
         pass
 
+# --- C Code Compilation Function (Adapted from sweep_mc_slab.py) ---
+
+def compile_c_code(c_code_dir, target_name):
+    """
+    Compiles a specific C code target using 'make <target_name>'
+    in the specified directory.
+    Assumes this script is run from 'python_code/'
+    """
+    # Get absolute path to the C code directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    c_dir_abs = os.path.abspath(os.path.join(script_dir, c_code_dir))
+    # The executable path is <c_dir_abs>/<target_name>
+    exe_path_abs = os.path.join(c_dir_abs, target_name)
+    
+    logger = logging.getLogger(__name__) 
+    logger.info("Compiling C target '%s' in: %s", target_name, c_dir_abs)
+    
+    # Run 'make clean' (cleans all targets)
+    try:
+        proc_clean = subprocess.run(
+            ["make", "clean"], 
+            cwd=c_dir_abs, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        if proc_clean.returncode != 0:
+            logger.warning("'make clean' failed. Continuing anyway...")
+            logger.debug("make clean stderr: %s", proc_clean.stderr)
+    except Exception as e:
+        logger.warning("'make clean' failed: %s. Continuing anyway...", e)
+
+    # Run 'make <target_name>'
+    try:
+        proc_make = subprocess.run(
+            ["make", target_name], # Pass the specific target
+            cwd=c_dir_abs, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True  # Raise error if make fails
+        )
+        logger.debug("make stdout: %s", proc_make.stdout)
+        logger.info("C target '%s' compiled successfully.", target_name)
+    except subprocess.CalledProcessError as e:
+        logger.error("'make %s' failed! Return code: %s", target_name, e.returncode)
+        logger.error("make stdout: %s", getattr(e, 'stdout', ''))
+        logger.error("make stderr: %s", getattr(e, 'stderr', ''))
+        sys.exit(1) # Exit if compilation fails
+    except Exception as e:
+        logger.exception("Unexpected error while running 'make %s': %s", target_name, e)
+        sys.exit(1)
+
+    # Check if executable exists
+    if not os.path.exists(exe_path_abs):
+        logger.error("Executable not found after compile: %s", exe_path_abs)
+        sys.exit(1)
+        
+    return exe_path_abs
+
 # --- Main Simulation ---
 
 def build_command(args, n, P):
@@ -252,7 +313,7 @@ def build_command(args, n, P):
     
     # Base command: ./exe C Cc H n
     base_cmd = [
-        args.exe, # This is now set automatically in main()
+        args.exe, # This is set in main() after compilation
         str(args.C),
         str(args.CC),
         str(args.H),
@@ -372,34 +433,32 @@ def main():
 
     args = parser.parse_args()
 
-    # --- 1. Setup ---
+    # --- 1. Setup & Compile C Code ---
     
-    # --- NEW: Determine executable path based on mode ---
+    # Determine the target executable name based on the mode
     if args.mode == 'pthreads':
         exe_name = 'mc_slab_pthreads'
     elif args.mode == 'mpi':
         exe_name = 'mc_slab_mpi'
     else:
         # This case should be handled by argparse 'choices', but good to be safe
-        print(f"Error: Unknown mode '{args.mode}'", file=sys.stderr)
+        logger.error("Unknown mode: %s", args.mode)
         sys.exit(1)
 
-    exe_path = os.path.abspath(os.path.join('../c_code', exe_name))
+    # Compile the required C executable
+    try:
+        c_code_dir_relative = '../c_code'
+        compiled_exe_path = compile_c_code(c_code_dir_relative, exe_name)
+        
+        # Add the compiled exe path to the args object
+        args.exe = compiled_exe_path
+        
+    except Exception as e:
+        logger.exception("Could not compile C code: %s", e)
+        logger.info("Please ensure 'make' is installed and Makefile is present in %s.", c_code_dir_relative)
+        sys.exit(1)
 
-    # --- NEW: Validate the executable ---
-    if not os.path.isfile(exe_path):
-        print(f"Error: Executable not found at expected path: {exe_path}", file=sys.stderr)
-        print(f"Please build the '{exe_name}' executable in the '../c_code' directory.", file=sys.stderr)
-        sys.exit(1)
-    if not os.access(exe_path, os.X_OK):
-        print(f"Error: Executable is not executable: {exe_path}", file=sys.stderr)
-        print(f"Please run 'chmod +x {exe_path}'", file=sys.stderr)
-        sys.exit(1)
-    
-    # --- NEW: Add the exe path to the args object for the rest of the script to use ---
-    args.exe = exe_path
-    
-    # --- End of modifications ---
+    # --- End of C Code compilation ---
 
     if args.results_dir is None:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -492,7 +551,7 @@ def main():
     
     summary_csv_path = os.path.join(args.results_dir, "summary.csv")
     df_summary.to_csv(summary_csv_path, index=False)
-    logger.info("Wwote summary data to %s", summary_csv_path)
+    logger.info("Wrote summary data to %s", summary_csv_path)
 
     # --- 4. Plot Results ---
     logger.info("Generating plots...")

@@ -302,10 +302,6 @@ def main():
         trace_dir = os.path.dirname(args.trace_file) or "."
         trace_base_name = os.path.basename(args.trace_file)
         
-        # Fixed glob pattern to find files like:
-        # "trace/check_n100000_P4_pthreads_t0.csv"
-        # "trace/check_n100000_P4_mpi_r0.csv"
-        # "trace/check_n100000_P4_serial.csv"
         pattern = os.path.join(trace_dir, f"{trace_base_name}*_n*_P*.*csv")
         
         cleaned_count = 0
