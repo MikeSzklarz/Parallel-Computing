@@ -8,6 +8,9 @@ both parallel (pthreads and MPI) implementations.
 
 This script implements and expands on the requirements from pages 7-8 of
 MCNT-Parallel.pdf.
+
+It now auto-compiles all C-code dependencies and provides
+detailed statistics (mean, std) for all simulation outputs.
 """
 
 import argparse
@@ -19,12 +22,85 @@ import numpy as np
 import datetime
 import logging
 import glob
+import stat # For file permissions
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def build_command(args, mode, n, P):
+# --- C Code Compilation Functions ---
+
+def clean_c_code(c_code_dir):
+    """
+    Runs 'make clean' once in the specified directory.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    c_dir_abs = os.path.abspath(os.path.join(script_dir, c_code_dir))
+    
+    logger.info("Cleaning C code targets in: %s", c_dir_abs)
+    try:
+        proc_clean = subprocess.run(
+            ["make", "clean"], 
+            cwd=c_dir_abs, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        if proc_clean.returncode != 0:
+            logger.warning("'make clean' failed. Continuing anyway...")
+            logger.debug("make clean stderr: %s", proc_clean.stderr)
+    except Exception as e:
+        logger.warning("'make clean' failed: %s. Continuing anyway...", e)
+
+
+def compile_c_code(c_code_dir, target_name):
+    """
+    Compiles a specific C code target using 'make <target_name>'
+    in the specified directory.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    c_dir_abs = os.path.abspath(os.path.join(script_dir, c_code_dir))
+    exe_path_abs = os.path.join(c_dir_abs, target_name)
+    
+    logger = logging.getLogger(__name__) 
+    logger.info("Compiling C target '%s' in: %s", target_name, c_dir_abs)
+    
+    try:
+        proc_make = subprocess.run(
+            ["make", target_name], # Pass the specific target
+            cwd=c_dir_abs, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True  # Raise error if make fails
+        )
+        logger.debug("make stdout: %s", proc_make.stdout)
+        logger.info("C target '%s' compiled successfully.", target_name)
+    except subprocess.CalledProcessError as e:
+        logger.error("'make %s' failed! Return code: %s", target_name, e.returncode)
+        logger.error("make stdout: %s", getattr(e, 'stdout', ''))
+        logger.error("make stderr: %s", getattr(e, 'stderr', ''))
+        sys.exit(1) # Exit if compilation fails
+    except Exception as e:
+        logger.exception("Unexpected error while running 'make %s': %s", target_name, e)
+        sys.exit(1)
+
+    if not os.path.exists(exe_path_abs):
+        logger.error("Executable not found after compile: %s", exe_path_abs)
+        sys.exit(1)
+        
+    try:
+        os.chmod(exe_path_abs, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+        logger.info("Set execute permissions on %s", exe_path_abs)
+    except Exception as e:
+        logger.error("Failed to set execute permissions on %s: %s", exe_path_abs, e)
+        sys.exit(1)
+            
+    return exe_path_abs
+
+# --- Simulation Functions ---
+
+def build_command(args, exe_path, mode, n, P):
     """Builds the subprocess command array for serial, pthreads, or mpi."""
     
     # Base command: ./exe C Cc H n
@@ -42,7 +118,7 @@ def build_command(args, mode, n, P):
         trace_base = f"{args.trace_file}_n{n}_P{P}_{mode}"
         
     if mode == 'serial':
-        cmd = [args.serial] + base_cmd
+        cmd = [exe_path] + base_cmd
         if trace_base:
             # Note: Serial trace doesn't get a rank/thread ID
             cmd.extend(['--trace-file', f"{trace_base}.csv", '--trace-every', str(args.trace_every)])
@@ -50,7 +126,7 @@ def build_command(args, mode, n, P):
 
     elif mode == 'pthreads':
         # ./exe C Cc H n [opts] T
-        cmd = [args.pthreads] + base_cmd
+        cmd = [exe_path] + base_cmd
         if trace_base:
             cmd.extend(['--trace-file', trace_base, '--trace-every', str(args.trace_every)])
         cmd.append(str(P))
@@ -58,7 +134,7 @@ def build_command(args, mode, n, P):
         
     elif mode == 'mpi':
         # mpirun -np P ./exe C Cc H n [opts]
-        cmd = [args.mpi_executable, '-np', str(P), args.mpi] + base_cmd
+        cmd = [args.mpi_executable, '-np', str(P), exe_path] + base_cmd
         if trace_base:
             cmd.extend(['--trace-file', trace_base, '--trace-every', str(args.trace_every)])
         return cmd
@@ -108,9 +184,6 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     # Executable args
-    parser.add_argument('--serial', default='../c_code/mc_slab', help='Path to SERIAL executable')
-    parser.add_argument('--pthreads', default='../c_code/mc_slab_pthreads', help='Path to PTHREADS executable')
-    parser.add_argument('--mpi', default='../c_code/mc_slab_mpi', help='Path to MPI executable')
     parser.add_argument('--mpi-executable', default='mpirun', help='Path to mpirun')
 
     # Simulation physics args
@@ -121,15 +194,17 @@ def main():
 
     # Sweep args (n)
     parser.add_argument('--n-start', type=int, default=100000, help='Min particle count n')
-    parser.add_argument('--n-max', type=int, default=1000000, help='Max particle count n')
-    parser.add_argument('--n-steps', type=int, default=2, help='Number of n values to test (logarithmic scale)')
+    parser.add_argument('--n-max', type=int, default=100000000, help='Max particle count n')
+    parser.add_argument('--n-steps', type=int, default=5, help='Number of n values to test (logarithmic scale)')
     
     # Sweep args (P)
-    parser.add_argument('--Ps', default='1,2,4,8', help='Comma-separated list of P values to test (e.g., 1,2,4,8)')
+    parser.add_argument('--P-start', type=int, default=1, help='Min threads/processes P')
+    parser.add_argument('--P-max', type=int, default=8, help='Max threads/processes P')
+    parser.add_argument('--P-step', type=int, default=1, help='Step size for P sweep')
     
     # Benchmarking control
     parser.add_argument('--trials', type=int, default=3, help='Number of trials per (n, P) config')
-    parser.add_argument('--abs-threshold', type=float, default=0.005, help='Absolute difference threshold for PASS/FAIL')
+    parser.add_argument('--abs-threshold', type=float, default=0.001, help='Absolute difference threshold for PASS/FAIL')
 
     # Output args
     parser.add_argument('--results-dir', default=None, help='Directory to save results. (Default: consistency_results_all_timestamp)')
@@ -157,6 +232,30 @@ def main():
     logger.addHandler(fh)
 
     logger.info("Starting comprehensive consistency check.")
+    
+    # --- 1b. Compile C Code ---
+    try:
+        c_code_dir_relative = '../c_code'
+        logger.info("Compiling C executables...")
+        
+        clean_c_code(c_code_dir_relative)
+        
+        serial_exe_path = compile_c_code(
+            c_code_dir_relative, 'mc_slab'
+        )
+        pthreads_exe_path = compile_c_code(
+            c_code_dir_relative, 'mc_slab_pthreads'
+        )
+        mpi_exe_path = compile_c_code(
+            c_code_dir_relative, 'mc_slab_mpi'
+        )
+        logger.info("C executables compiled successfully.")
+        
+    except Exception as e:
+        logger.exception(f"Could not compile C code: {e}")
+        logger.info(f"Please ensure 'make' is installed and Makefile is present in {c_code_dir_relative}.")
+        sys.exit(1)
+    
     logger.info("Parameters: %s", vars(args))
 
     # Build task list
@@ -165,7 +264,14 @@ def main():
     else:
         n_values = [args.n_start]
         
-    p_values = [int(p) for p in args.Ps.split(',')]
+    p_values = list(range(args.P_start, args.P_max + 1, args.P_step))
+    if 1 not in p_values:
+        p_values.insert(0, 1) # Add 1 if not present
+    p_values = sorted(list(set(p_values))) # Remove duplicates
+    
+    logger.info(f"Generated n values: {n_values}")
+    logger.info(f"Generated P values: {p_values}")
+
     tasks = [(n, p) for n in n_values for p in p_values]
     
     # --- 2. Run Simulations ---
@@ -179,15 +285,15 @@ def main():
         
         for t in range(args.trials):
             # Run Serial
-            serial_cmd = build_command(args, 'serial', n, P)
+            serial_cmd = build_command(args, serial_exe_path, 'serial', n, P)
             r_s, b_s, t_s = run_and_parse(serial_cmd)
             
             # Run Pthreads
-            pthreads_cmd = build_command(args, 'pthreads', n, P)
+            pthreads_cmd = build_command(args, pthreads_exe_path, 'pthreads', n, P)
             r_p, b_p, t_p = run_and_parse(pthreads_cmd)
 
             # Run MPI
-            mpi_cmd = build_command(args, 'mpi', n, P)
+            mpi_cmd = build_command(args, mpi_exe_path, 'mpi', n, P)
             r_m, b_m, t_m = run_and_parse(mpi_cmd)
             
             # Check for any failures
@@ -240,10 +346,30 @@ def main():
     
     # Calculate mean diffs per (n, P)
     df_summary = df_raw.groupby(['n', 'P']).agg(
+        # Trial info
         trials=('trial', 'count'),
+        
+        # --- NEW: Serial results stats ---
+        r_serial_mean=('r_serial', 'mean'), r_serial_std=('r_serial', 'std'),
+        b_serial_mean=('b_serial', 'mean'), b_serial_std=('b_serial', 'std'),
+        t_serial_mean=('t_serial', 'mean'), t_serial_std=('t_serial', 'std'),
+
+        # --- NEW: Pthreads results stats ---
+        r_pthreads_mean=('r_pthreads', 'mean'), r_pthreads_std=('r_pthreads', 'std'),
+        b_pthreads_mean=('b_pthreads', 'mean'), b_pthreads_std=('b_pthreads', 'std'),
+        t_pthreads_mean=('t_pthreads', 'mean'), t_pthreads_std=('t_pthreads', 'std'),
+        
+        # --- NEW: MPI results stats ---
+        r_mpi_mean=('r_mpi', 'mean'), r_mpi_std=('r_mpi', 'std'),
+        b_mpi_mean=('b_mpi', 'mean'), b_mpi_std=('b_mpi', 'std'),
+        t_mpi_mean=('t_mpi', 'mean'), t_mpi_std=('t_mpi', 'std'),
+
+        # Serial vs Pthreads consistency
         max_abs_diff_sp_mean=('max_abs_diff_sp', 'mean'),
         max_abs_diff_sp_max=('max_abs_diff_sp', 'max'),
         pass_count_sp=('passed_sp', 'sum'),
+        
+        # Serial vs MPI consistency
         max_abs_diff_sm_mean=('max_abs_diff_sm', 'mean'),
         max_abs_diff_sm_max=('max_abs_diff_sm', 'max'),
         pass_count_sm=('passed_sm', 'sum')
@@ -258,6 +384,9 @@ def main():
     summary_csv_path = os.path.join(args.results_dir, "summary.csv")
     df_summary.to_csv(summary_csv_path, index=False)
     logger.info("Wrote summary data to %s", summary_csv_path)
+    # --- NEW: Log message confirming new stats ---
+    logger.info("Summary includes mean/std for all simulation results (r,b,t) and consistency checks.")
+
 
     # --- 4. Print Final Report to Console ---
     total_configs = len(df_summary)
